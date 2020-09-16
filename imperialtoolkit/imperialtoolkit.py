@@ -4,11 +4,15 @@ import sys
 import cpuinfo
 import platform
 import lavalink
-from collections import Counter
+import asyncio
+import contextlib
+from collections import defaultdict, Counter
 
 from datetime import datetime
 
 from redbot.core import version_info as red_version_info, commands, Config
+
+from redbot.core.utils import AsyncIter
 
 from redbot.core.utils.chat_formatting import humanize_timedelta
 
@@ -25,11 +29,17 @@ class ImperialToolkit(commands.Cog):
 
     __author__ = "kennnyshiwa"
 
+    async def red_delete_data_for_user(self, **kwargs):
+        """ Nothing to delete """
+        return
+
     def __init__(self, bot):
         self.bot = bot
         self.counter = Counter()
         self.sticky_counter = Counter()
+        self._user_count = 0
         lavalink.register_event_listener(self.event_handler) 
+        self.user_task = asyncio.create_task(self._get_user_count())
 
     def cog_unload(self):
         lavalink.unregister_event_listener(self.event_handler)
@@ -49,6 +59,20 @@ class ImperialToolkit(commands.Cog):
         )
         uptime = humanize_timedelta(timedelta=delta)
         return uptime
+
+    async def _get_user_count(self, ):
+        await self.bot.wait_until_ready()
+        with contextlib.suppress(asyncio.CancelledError):
+            self._user_count = len(self.bot.users)
+            while True:
+                temp_data = defaultdict(set)
+                async for s in AsyncIter(self.bot.guilds):
+                    if s.unavailable:
+                        continue
+                    async for m in AsyncIter(s.members):
+                        temp_data["Unique Users"].add(m.id)
+                self._user_count = len(temp_data["Unique Users"])
+                await asyncio.sleep(30)
 
     @staticmethod
     def _size(num):
@@ -99,16 +123,16 @@ class ImperialToolkit(commands.Cog):
                 osver = "Could not parse OS, report this on Github."
 
             try:
-                cpu = cpuinfo.get_cpu_info()["brand"]
+                cpu = cpuinfo.get_cpu_info()["brand_raw"]
             except:
                 cpu = "unknown"
             cpucount = psutil.cpu_count()
             ramamount = psutil.virtual_memory()
-            ram_ios = "{0:<11} {1:>{width}}".format("", self._size(ramamount.total), width=width)
+            ram_ios = "{1:>{width}}".format("", self._size(ramamount.total), width=width)
 
             servers = len(self.bot.guilds)
             shards = self.bot.shard_count
-            totalusers = sum(len(s.members) for s in self.bot.guilds)
+            totalusers = self._user_count
             channels = sum(len(s.channels) for s in self.bot.guilds)
             numcommands = len(self.bot.commands)
             uptime = str(self.get_bot_uptime())
@@ -139,7 +163,7 @@ class ImperialToolkit(commands.Cog):
                     "OS: {os}\n"
                     "CPU Info: `{cpu}`\n"
                     "Core Count: `{cores}`\n"
-                    "Total Ram: ``{ram}``"
+                    "Total Ram: `{ram}`"
                 ).format(
                     cpu_usage=str(cpustats),
                     ram_usage=str(ramusage.percent),

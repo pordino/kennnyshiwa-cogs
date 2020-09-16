@@ -12,16 +12,20 @@ import contextlib
 from typing import Union
 from random import choice, sample
 
-log = logging.getLogger("red.Cog.Space")
+log = logging.getLogger("red.kennnyshiwa-cogs.Space")
 
 
 class Core(commands.Cog):
 
     __author__ = "kennnyshiwa"
 
+    async def red_delete_data_for_user(self, **kwargs):
+        """ Nothing to delete """
+        return
+
     def __init__(self, bot: Red):
         self.bot = bot
-        self.cache = {"new_channels": []}
+        self.cache = []
 
         self.config = Config.get_conf(self, 3765640575174574082, force_registration=True)
         self.config.register_channel(auto_apod=False, last_apod_sent=None)
@@ -34,6 +38,7 @@ class Core(commands.Cog):
         self.bot.loop.create_task(self.session.close())
         self.auto_apod_loop.cancel()
         self.new_channels_loop.cancel()
+        self.cache.clear()
 
     async def auto_apod(self):
         """
@@ -43,16 +48,14 @@ class Core(commands.Cog):
         await self.bot.wait_until_ready()
         while True:
             try:
-                data = await self.get_data(
-                    "https://api.nasa.gov/planetary/apod?api_key=pM1xDdu2D9jATa3kc2HE0xnLsPHdoG9cNGg850WR"
-                )
+                data = await self.get_data("https://api.martinethebot.com/images/apod")
                 if not data:
                     continue
                 all_channels = await self.config.all_channels()
                 for channels in all_channels.items():
                     if channels[1]["auto_apod"]:
                         if channels[1]["last_apod_sent"] != data["date"]:
-                            channel = self.bot.get_channel(id=channels[0])
+                            channel = self.bot.get_channel(channels[0])
                             if not channel:
                                 await self.config.channel_from_id(channels[0]).auto_apod.set(False)
                                 continue
@@ -67,29 +70,31 @@ class Core(commands.Cog):
     async def check_new_channels(self):
         """
         Task used to check if there is new channels in config file.
-        Check every 15 seconds.
+        Check every 2 minutes.
         """
         await self.bot.wait_until_ready()
         while True:
-            await asyncio.sleep(15)
+            await asyncio.sleep(120)
             try:
-                if self.cache["new_channels"]:
+                if self.cache:
                     all_channels = await self.config.all_channels()
                     for channels in all_channels.items():
                         if channels[1]["auto_apod"]:
-                            for new_channels in self.cache["new_channels"]:
-                                channel = self.bot.get_channel(id=new_channels)
+                            for new_channels in self.cache:
+                                channel = self.bot.get_channel(new_channels)
                                 if not channel:
-                                    await self.config.channel_from_id(new_channels).auto_apod.set(False)
+                                    await self.config.channel_from_id(new_channels).auto_apod.set(
+                                        False
+                                    )
                                     continue
                                 msg = await self.apod_text(
                                     await self.get_data(
-                                        "https://api.nasa.gov/planetary/apod?api_key=pM1xDdu2D9jATa3kc2HE0xnLsPHdoG9cNGg850WR"
+                                        "https://api.martinethebot.com/images/apod"
                                     ),
                                     channel,
                                 )
                                 await self.maybe_send_embed(channel, msg)
-                                self.cache["new_channels"].remove(new_channels)
+                                self.cache.remove(new_channels)
             except Exception as error:
                 log.exception("Exception in check_new_channels task: ", exc_info=error)
 
@@ -98,12 +103,10 @@ class Core(commands.Cog):
         try:
             async with self.session.get(url) as resp:
                 if resp.status != 200:
-                    log.error(f"Can't get data from {url}, code: {resp.status}")
                     return None
                 data = await resp.json()
                 return data
-        except aiohttp.client_exceptions.ClientConnectionError as error:
-            log.error(str(error))
+        except aiohttp.ClientConnectionError:
             return None
 
     async def apod_text(self, data: dict, context: Union[commands.Context, discord.TextChannel]):
@@ -111,19 +114,31 @@ class Core(commands.Cog):
             return "Astronomy Picture of the Day: `Impossible to get Nasa API.`"
 
         details = data["explanation"]
-        if len(details) > 1024:
+        if len(details) > 2048:
             return f"**Astronomy Picture of the Day**\n\n__{data['title']}__```{details}```Today is **{data['date']}**\n{data['url']}"
         else:
             em = discord.Embed(
                 color=await self.bot.get_embed_color(context)
                 if hasattr(self.bot, "get_embed_color")
                 else self.bot.color,
-                title="Astronomy Picture of the Day",
-                url="{}".format(data["url"]),
+                title=data["title"],
+                url=data["url"],
+                description=details,
+            )
+            em.set_author(
+                name="Astronomy Picture of the Day",
+                url="https://apod.nasa.gov/apod/astropix.html",
+                icon_url="https://i.imgur.com/Wh8jY9c.png",
             )
             em.set_image(url=data["url"])
-            em.add_field(name=data["title"], value=details)
-            em.set_footer(text="Today is {}".format(data["date"]))
+            em.set_footer(
+                text="{copyright}Today is {date}".format(
+                    copyright=f"Image Credits: {data['copyright']} • "
+                    if data.get("copyright")
+                    else "",
+                    date=data["date"],
+                )
+            )
             return em
 
     @staticmethod
@@ -183,6 +198,5 @@ class Core(commands.Cog):
                 await destination.send(embed=msg)
             else:
                 await destination.send(msg)
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException) as error:
-            log.error(str(error))
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             return
